@@ -1,0 +1,35 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_20-7a1b0ac420a7fa2cf61cf25336a05125791bc1e1",
+  "solcVersion": "0.8.20",
+  "solcLongVersion": "0.8.20+commit.a1b79de6",
+  "userSourceNameMap": {
+    "contracts/ChainVote.sol": "project/contracts/ChainVote.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "shanghai",
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode",
+            "evm.deployedBytecode",
+            "evm.methodIdentifiers",
+            "metadata"
+          ]
+        }
+      },
+      "remappings": []
+    },
+    "sources": {
+      "project/contracts/ChainVote.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\n/**\n * @title ChainVote\n * @notice On-chain voting with optional gas sponsorship.\n *         Every vote is a transaction. Every result is independently verifiable.\n * @dev Deployed on Base. No admin keys, no upgrade mechanism — fully immutable.\n */\ncontract ChainVote {\n    struct Poll {\n        uint256 id;\n        address creator;\n        string metadataCID;\n        string[] options;\n        uint256 deadline;\n        uint256 createdAt;\n        bool active;\n    }\n\n    uint256 public pollCount;\n    mapping(uint256 => Poll) public polls;\n    mapping(uint256 => mapping(uint256 => uint256)) public voteCounts;\n    mapping(uint256 => mapping(address => bool)) public hasVoted;\n    mapping(uint256 => mapping(address => uint256)) public voterChoice;\n    mapping(address => uint256[]) public creatorPolls;\n\n    // Gas sponsorship\n    mapping(uint256 => uint256) public gasTank;\n    mapping(uint256 => bool) public sponsorshipEnabled;\n    uint256 public constant VOTE_GAS_REFUND = 0.00001 ether;\n\n    event PollCreated(uint256 indexed pollId, address indexed creator, string metadataCID, uint256 deadline, uint256 optionCount);\n    event VoteCast(uint256 indexed pollId, address indexed voter, uint256 optionIndex);\n    event PollClosed(uint256 indexed pollId, address indexed creator);\n    event GasTankFunded(uint256 indexed pollId, address indexed funder, uint256 amount);\n    event GasRefunded(uint256 indexed pollId, address indexed voter, uint256 amount);\n    event GasTankWithdrawn(uint256 indexed pollId, address indexed creator, uint256 amount);\n\n    modifier pollExists(uint256 pollId) { require(pollId < pollCount, \"Poll does not exist\"); _; }\n    modifier pollActive(uint256 pollId) {\n        require(polls[pollId].active, \"Poll is closed\");\n        require(block.timestamp < polls[pollId].deadline, \"Poll has ended\");\n        _;\n    }\n    modifier onlyCreator(uint256 pollId) { require(polls[pollId].creator == msg.sender, \"Not the poll creator\"); _; }\n\n    function createPoll(string calldata metadataCID, string[] calldata optionLabels, uint256 durationSec) external returns (uint256 pollId) {\n        uint256 len = optionLabels.length;\n        require(len >= 2 && len <= 10, \"Need 2-10 options\");\n        require(durationSec >= 60, \"Min duration is 60 seconds\");\n        require(bytes(metadataCID).length > 0, \"Metadata CID required\");\n\n        pollId = pollCount++;\n        polls[pollId] = Poll({ id: pollId, creator: msg.sender, metadataCID: metadataCID, options: optionLabels, deadline: block.timestamp + durationSec, createdAt: block.timestamp, active: true });\n        creatorPolls[msg.sender].push(pollId);\n        emit PollCreated(pollId, msg.sender, metadataCID, block.timestamp + durationSec, len);\n    }\n\n    function castVote(uint256 pollId, uint256 optionIndex) external pollExists(pollId) pollActive(pollId) {\n        require(!hasVoted[pollId][msg.sender], \"Already voted\");\n        require(optionIndex < polls[pollId].options.length, \"Invalid option\");\n        hasVoted[pollId][msg.sender] = true;\n        voterChoice[pollId][msg.sender] = optionIndex;\n        voteCounts[pollId][optionIndex]++;\n        _refundGas(pollId, msg.sender);\n        emit VoteCast(pollId, msg.sender, optionIndex);\n    }\n\n    function closePoll(uint256 pollId) external pollExists(pollId) onlyCreator(pollId) {\n        require(polls[pollId].active, \"Already closed\");\n        polls[pollId].active = false;\n        emit PollClosed(pollId, msg.sender);\n    }\n\n    function fundGasTank(uint256 pollId) external payable pollExists(pollId) {\n        require(msg.value > 0, \"Must send ETH\");\n        gasTank[pollId] += msg.value;\n        if (!sponsorshipEnabled[pollId]) sponsorshipEnabled[pollId] = true;\n        emit GasTankFunded(pollId, msg.sender, msg.value);\n    }\n\n    function withdrawGasTank(uint256 pollId) external pollExists(pollId) onlyCreator(pollId) {\n        require(block.timestamp >= polls[pollId].deadline, \"Poll still active\");\n        uint256 amount = gasTank[pollId];\n        require(amount > 0, \"No funds to withdraw\");\n        gasTank[pollId] = 0;\n        (bool ok, ) = payable(msg.sender).call{value: amount}(\"\");\n        require(ok, \"Withdrawal failed\");\n        emit GasTankWithdrawn(pollId, msg.sender, amount);\n    }\n\n    function getResults(uint256 pollId) external view pollExists(pollId) returns (uint256[] memory counts) {\n        uint256 len = polls[pollId].options.length;\n        counts = new uint256[](len);\n        for (uint256 i = 0; i < len; i++) counts[i] = voteCounts[pollId][i];\n    }\n\n    function getPollOptions(uint256 pollId) external view pollExists(pollId) returns (string[] memory) { return polls[pollId].options; }\n    function getCreatorPolls(address creator) external view returns (uint256[] memory) { return creatorPolls[creator]; }\n    function isPollExpired(uint256 pollId) external view pollExists(pollId) returns (bool) { return block.timestamp >= polls[pollId].deadline; }\n\n    function _refundGas(uint256 pollId, address voter) internal {\n        if (!sponsorshipEnabled[pollId] || gasTank[pollId] < VOTE_GAS_REFUND) return;\n        gasTank[pollId] -= VOTE_GAS_REFUND;\n        (bool sent, ) = payable(voter).call{value: VOTE_GAS_REFUND}(\"\");\n        if (sent) emit GasRefunded(pollId, voter, VOTE_GAS_REFUND);\n        else gasTank[pollId] += VOTE_GAS_REFUND;\n    }\n}\n"
+      }
+    }
+  }
+}
