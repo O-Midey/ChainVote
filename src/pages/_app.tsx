@@ -14,7 +14,8 @@ export default function App({ Component, pageProps }: AppProps) {
         <title>ChainVote — On-chain voting</title>
         <meta name="description" content="Every vote is a transaction on Base. Immutable. Verifiable." />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" href="/favicon.ico" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <link rel="alternate icon" href="/favicon.ico" />
       </Head>
       <ErrorBoundary>
       <AuthProvider>
