@@ -46,6 +46,10 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
           createdAt: Number(raw.createdAt), active: raw.active,
           results: res_.map(Number),
           totalVotes: res_.reduce((a: number, b: number) => a + Number(b), 0),
+          metadata: {
+            title: raw.metadataCID.split("-").slice(1).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || `Poll #${i}`,
+            description: "",
+          },
         });
       } catch { /* skip broken poll */ }
     }
